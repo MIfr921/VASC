@@ -1,0 +1,169 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
+pip install scanpy
+pip install scanpy
+import scanpy as sc
+adata = sc.read_h5ad('train_pbmc.h5ad')
+adata
+df_obs=sc.get.obs_df(adata,keys=['condition', 'n_counts', 'n_genes', 'mt_frac', 'cell_type'])
+df_obs.head()
+df_var=sc.get.var_df(adata,keys=['gene_symbol', 'n_cells'])
+df_var.head(30)
+df_obs.shape
+df_var.shape
+adata.X.shape
+df_obs.info()
+df_var['n_cells'].mean()
+adata.to_df().to_csv('./adata.csv', sep=',')
+df=pd.read_csv('adata.csv')
+df.head()
+df.shape
+df_data=df.copy()
+col=['index']
+df_data=df_data.drop(columns=df.columns[[0]])
+df_data=df_data.astype(int)
+df_data.head()
+df_data_T=df_data.T
+print('Total', len(df_data_T), 'genes, ', len(df_data_T.columns), 'cells')
+counts = df_data_T.values.sum(axis=0)
+n_genes = (df_data_T.values > 0.0).astype(int).sum(axis=0)
+genes_zero_values = df_data_T.index[df_data_T.values.sum(axis=1) == 0]
+# genes_zero_valuesに該当する行をすべて削除する
+df_data_T.drop(genes_zero_values, inplace=True)
+n_genes = (df_data_T.values > 0.0).astype(int).sum(axis=0)
+# counts, n_genesはどちらも細胞の数だけ要素を持つリストなので，
+# 最大値（max），最小値（min），平均値（average）を出力してみる
+print('Stats for counts: max=', np.max(counts),
+      'min=', np.min(counts),
+      f'average= {np.average(counts):.2f}')
+print('Stats for detected genes: max=', np.max(n_genes),
+      'min=', np.min(n_genes),
+      f'average= {np.average(n_genes):.2f}')
+df_anno=df.copy()
+#col=['cell','barcode','assigned_cluster']
+df_anno=df_anno.loc[:, col]
+print(df_anno.shape)
+df_anno.head()
+
+#正規化
+normalized = 10000 * df_data_T.values / df_data_T.values.sum(axis=0)
+lognormalized = np.log1p(normalized)
+df_lognormalized = pd.DataFrame(lognormalized, index=df_data_T.index, columns=df_data_T.columns)
+df_lognormalized.head()
+
+#PCA
+from sklearn.decomposition import PCA
+X_pca=PCA(n_components=500).fit_transform(df_lognormalized.values.T)
+
+# 表示
+print('X_pca shape:{}'.format(X_pca.shape))
+num=[]
+result = []
+for num in range(500):
+  num='pc'+str(num)
+  result.append(num)
+newvalue = pd.DataFrame(X_pca)
+newvalue.columns =result
+newvalue.head()
+df_obs=df_obs.reset_index()
+newvalue=newvalue.join(df_obs)
+newvalue
+plotdata = newvalue.loc[:,newvalue.columns]
+
+# 答えのラベルを追加
+plotdata["label"] = newvalue['cell_type']
+
+import seaborn as sns
+
+# 図示
+plt.figure(figsize=(25,16))
+sns.scatterplot(data = plotdata, x= "pc0", y= "pc1", hue = "label")
+plt.legend(labels = plotdata["label"].value_counts().index.to_list(),loc = 2, bbox_to_anchor = (1,1))
+plt.xlabel("PC1")
+plt.ylabel("PC2")
+newvalue.to_csv('newvalue_PCA.csv')
+
+#t-SNE
+from sklearn.manifold import TSNE
+df_1_TSNE = TSNE(n_components=2, random_state=0).fit_transform(X_pca) 
+newvalue = pd.DataFrame(df_1_TSNE)
+newvalue=newvalue.join(df_obs)
+newvalue
+newvalue.to_csv('newvalue_tsne.csv')
+
+#VASC
+newvalue=df_lognormalized.T
+newvalue.join(df_obs)
+newvalue.to_csv("seimei.txt", sep=",")
+col=['cell_type','condition']
+newvalue[col].to_csv("seimei_label.txt", sep=",")
+newvalue.to_csv('newvalue_ronbun.csv')
+import numpy as np
+from helpers import clustering,measure,print_2D
+from config import config
+from vasc_dev import vasc
+if __name__ == '__main__':
+    DATASET = 'seimei' #sys.argv[1]
+    PREFIX = 'seimei' #sys.argv[2]
+    
+    filename = DATASET+'.txt'
+    data = open( filename )
+    head = data.readline().rstrip(',').split(',')
+    
+    label_file = open( DATASET+'_label.txt' )
+    label_dict = {}
+    for line in label_file:
+        temp = line.rstrip(',').split(',')
+        label_dict[temp[0]] = temp[1]
+    label_file.close()
+    
+    label = []
+    for c in head:
+        if c in label_dict.keys():
+            label.append(label_dict[c])
+        else:
+            print(c)
+    
+    label_set = []
+    for c in label:
+        if c not in label_set:
+            label_set.append(c)
+    name_map = {value:idx for idx,value in enumerate(label_set)}
+    id_map = {idx:value for idx,value in enumerate(label_set)}
+    label = np.asarray( [ name_map[name] for name in label ] )
+    
+    expr = []
+    for line in data:
+        temp = line.rstrip().split()[1:]
+        temp = [ float(x) for x in temp]
+        expr.append( temp )
+    
+    expr = np.asarray(expr).T
+    n_cell,_ = expr.shape
+    if n_cell > 150:
+        batch_size=config['batch_size']
+    else:
+        batch_size=32 
+
+    for i in range(1):
+        res = vasc( expr,var=False,
+                    latent=config['latent'],
+                    annealing=False,
+                    batch_size=batch_size,
+                    prefix=PREFIX,
+                    label=label,
+                    scale=config['scale'],
+                    patience=config['patience'] 
+                )
+
+        k = len( np.unique(label) )
+        cl,_ = clustering( res,k=k)
+        dm = measure( cl,label )
+newvalue = pd.DataFrame(res)
+newvalue=newvalue.join(df_obs)
+newvalue
+newvalue.to_csv('newvalue_ronbun.csv')
